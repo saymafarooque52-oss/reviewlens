@@ -7,3 +7,4 @@ cache.db
 cache.json
 .pytest_cache/
 .DS_Store
+.vscode/
