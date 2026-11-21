@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReviewLens — AI Customer Review Intelligence</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="logo-icon">RL</div>
+        <div>
+          <h1>ReviewLens</h1>
+          <p class="subtitle">AI-Powered Review Intelligence for Store Owners (English, Hindi, Hinglish & Emojis)</p>
+        </div>
+      </div>
+      <div id="metaBadge" class="meta-badge hidden"></div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Upload & Quick Actions -->
+    <section class="card upload-card">
+      <div class="upload-form">
+        <div class="file-input-group">
+          <label for="csvFile" class="file-label">Upload Customer Reviews CSV (<code>reviews.csv</code>)</label>
+          <input type="file" id="csvFile" accept=".csv" />
+        </div>
+        <button type="button" id="analyzeBtn" class="btn-primary">Analyze Reviews</button>
+      </div>
+      <p id="statusMsg" class="status-msg"></p>
+    </section>
+
+    <!-- Single-Screen Interactive Dashboard -->
+    <div id="dashboard" class="hidden">
+      <!-- KPI Summary Cards -->
+      <section class="stats-grid">
+        <div class="card stat-card">
+          <span class="stat-label">Reviews Analysed</span>
+          <strong id="statTotal" class="stat-value">0</strong>
+          <small id="statCleaning" class="stat-sub"></small>
+        </div>
+        <div class="card stat-card positive">
+          <span class="stat-label">Positive</span>
+          <strong id="statPos" class="stat-value">0%</strong>
+          <small class="stat-sub">Happy customers</small>
+        </div>
+        <div class="card stat-card neutral">
+          <span class="stat-label">Neutral</span>
+          <strong id="statNeu" class="stat-value">0%</strong>
+          <small class="stat-sub">Mixed feedback</small>
+        </div>
+        <div class="card stat-card negative">
+          <span class="stat-label">Negative</span>
+          <strong id="statNeg" class="stat-value">0%</strong>
+          <small class="stat-sub">Needs attention</small>
+        </div>
+        <div class="card stat-card warning">
+          <span class="stat-label">Needs Reply</span>
+          <strong id="statReply" class="stat-value">0</strong>
+          <small id="statAgreement" class="stat-sub"></small>
+        </div>
+      </section>
+
+      <!-- Visual Analytics -->
+      <section class="charts-grid">
+        <div class="card chart-card">
+          <h2>Sentiment Split</h2>
+          <div class="chart-wrapper">
+            <canvas id="sentimentChart"></canvas>
+          </div>
+        </div>
+        <div class="card chart-card">
+          <h2>Topic Distribution</h2>
+          <div class="chart-wrapper">
+            <canvas id="topicChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Top 3 Complaints & Praises -->
+      <section class="insights-grid">
+        <div class="card">
+          <h2>Top 3 Complaints</h2>
+          <ul id="topComplaints" class="insight-list complaints"></ul>
+        </div>
+        <div class="card">
+          <h2>Top 3 Praises</h2>
+          <ul id="topPraises" class="insight-list praises"></ul>
+        </div>
+      </section>
+
+      <!-- Product Breakdown Cards (Click any product to filter table) -->
+      <section class="card">
+        <div class="section-head">
+          <h2>Product Health Overview</h2>
+          <span class="hint">Click a product card to filter reviews below</span>
+        </div>
+        <div id="productCards" class="product-grid"></div>
+      </section>
+
+      <!-- Filterable Reviews Table + On-Demand AI Replies -->
+      <section class="card">
+        <div class="table-header">
+          <div>
+            <h2>Customer Reviews (<span id="filteredCount">0</span>)</h2>
+          </div>
+          <div class="filters">
+            <input type="text" id="searchInput" placeholder="Search review text or ID..." />
+            <select id="filterProduct">
+              <option value="all">All Products</option>
+            </select>
+            <select id="filterSentiment">
+              <option value="all">All Sentiments</option>
+              <option value="positive">Positive</option>
+              <option value="neutral">Neutral</option>
+              <option value="negative">Negative</option>
+            </select>
+            <select id="filterTopic">
+              <option value="all">All Topics</option>
+              <option value="quality">Quality</option>
+              <option value="delivery">Delivery</option>
+              <option value="price">Price</option>
+              <option value="packaging">Packaging</option>
+              <option value="support">Support</option>
+              <option value="size_fit">Size & Fit</option>
+              <option value="other">Other</option>
+            </select>
+            <button type="button" id="resetFiltersBtn" class="btn-secondary">Reset</button>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Product</th>
+                <th>Rating</th>
+                <th>Sentiment & Flags</th>
+                <th>Topics</th>
+                <th>AI English Summary & Original Review</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="reviewsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}?v=3"></script>
+</body>
+</html>

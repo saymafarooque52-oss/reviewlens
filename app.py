@@ -1,66 +1,91 @@
+import os
 from collections import Counter
+from typing import Any, Dict, List
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-
 from services.analyzer import analyze_reviews, generate_suggested_reply
+from services.cache import init_db
 from services.cleaner import parse_and_clean_csv
 
+load_dotenv()
+
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
+init_db()
 
 
-def _build_dashboard_summary(enriched_reviews: list) -> dict:
-    completed = [r for r in enriched_reviews if r.get("analysis_status") == "completed"]
-    total_analysed = len(completed)
+def _build_dashboard_summary(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+    completed = [r for r in reviews if r.get("analysis_status") == "completed"]
+    total = len(completed)
 
-    pos = sum(1 for r in completed if r["sentiment"] == "positive")
-    neu = sum(1 for r in completed if r["sentiment"] == "neutral")
-    neg = sum(1 for r in completed if r["sentiment"] == "negative")
-    needs_reply_count = sum(1 for r in completed if r["needs_reply"])
+    pos = sum(1 for r in completed if r.get("sentiment") == "positive")
+    neu = sum(1 for r in completed if r.get("sentiment") == "neutral")
+    neg = sum(1 for r in completed if r.get("sentiment") == "negative")
+    needs_reply = sum(1 for r in completed if r.get("needs_reply"))
 
-    pct_pos = round((pos / total_analysed) * 100, 1) if total_analysed else 0
-    pct_neu = round((neu / total_analysed) * 100, 1) if total_analysed else 0
-    pct_neg = round((neg / total_analysed) * 100, 1) if total_analysed else 0
+    rated = [r for r in completed if isinstance(r.get("rating"), int)]
+    mismatches = sum(1 for r in rated if r.get("rating_mismatch"))
+    agreement_pct = round(((len(rated) - mismatches) / len(rated)) * 100, 1) if rated else 100.0
 
-    # Aggregate top 3 complaints & praises from analyzed summaries/topics
-    neg_reviews = [r for r in completed if r["sentiment"] == "negative"]
-    pos_reviews = [r for r in completed if r["sentiment"] == "positive"]
-
-    neg_topics = Counter(t for r in neg_reviews for t in r.get("topics", []))
-    pos_topics = Counter(t for r in pos_reviews for t in r.get("topics", []))
+    neg_topics = Counter()
+    pos_topics = Counter()
+    for r in completed:
+        if r.get("sentiment") == "negative":
+            for t in r.get("topics", []):
+                neg_topics[t] += 1
+        elif r.get("sentiment") == "positive":
+            for t in r.get("topics", []):
+                pos_topics[t] += 1
 
     top_complaints = [
-        f"{topic.replace('_', ' ').title()} ({count} mentions): "
-        + next((r["summary"] for r in neg_reviews if topic in r["topics"]), "")
+        f"{topic.replace('_', ' ').title()} ({count} mentions)"
         for topic, count in neg_topics.most_common(3)
     ]
     top_praises = [
-        f"{topic.replace('_', ' ').title()} ({count} mentions): "
-        + next((r["summary"] for r in pos_reviews if topic in r["topics"]), "")
+        f"{topic.replace('_', ' ').title()} ({count} mentions)"
         for topic, count in pos_topics.most_common(3)
     ]
 
-    # Bonus: rating vs sentiment agreement %
-    with_numeric_rating = [r for r in completed if isinstance(r.get("rating"), int)]
-    mismatches = sum(1 for r in with_numeric_rating if r.get("rating_mismatch"))
-    agreement_pct = (
-        round(((len(with_numeric_rating) - mismatches) / len(with_numeric_rating)) * 100, 1)
-        if with_numeric_rating
-        else 100.0
-    )
+    # Bonus: Product-level breakdown
+    products_map: Dict[str, Dict[str, Any]] = {}
+    for r in completed:
+        prod = r.get("product", "Unknown")
+        if prod not in products_map:
+            products_map[prod] = {"product": prod, "total": 0, "positive": 0, "neutral": 0, "negative": 0, "neg_topics": Counter()}
+        products_map[prod]["total"] += 1
+        sent = r.get("sentiment", "neutral")
+        products_map[prod][sent] += 1
+        if sent == "negative":
+            for t in r.get("topics", []):
+                products_map[prod]["neg_topics"][t] += 1
+
+    product_cards = []
+    for prod, info in products_map.items():
+        top_issue = info["neg_topics"].most_common(1)
+        product_cards.append({
+            "product": prod,
+            "total": info["total"],
+            "positive": info["positive"],
+            "neutral": info["neutral"],
+            "negative": info["negative"],
+            "top_issue": f"{top_issue[0][0].replace('_', ' ').title()} ({top_issue[0][1]})" if top_issue else "None",
+        })
 
     return {
-        "total_analysed": total_analysed,
-        "positive_pct": pct_pos,
-        "neutral_pct": pct_neu,
-        "negative_pct": pct_neg,
-        "needs_reply_count": needs_reply_count,
+        "total_analysed": total,
+        "positive_pct": round((pos / total) * 100, 1) if total else 0.0,
+        "neutral_pct": round((neu / total) * 100, 1) if total else 0.0,
+        "negative_pct": round((neg / total) * 100, 1) if total else 0.0,
+        "needs_reply_count": needs_reply,
+        "mismatch_count": mismatches,
+        "rating_agreement_pct": agreement_pct,
         "top_complaints": top_complaints,
         "top_praises": top_praises,
-        "rating_agreement_pct": agreement_pct,
-        "mismatch_count": mismatches,
+        "product_breakdown": product_cards,
     }
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
@@ -70,37 +95,40 @@ def api_analyze():
     if "file" not in request.files:
         return jsonify({"error": "No CSV file uploaded."}), 400
 
-    uploaded = request.files["file"]
-    if not uploaded.filename.lower().endswith(".csv"):
+    file = request.files["file"]
+    if not file.filename or not file.filename.lower().endswith(".csv"):
         return jsonify({"error": "Please upload a valid .csv file."}), 400
 
-    raw_text = uploaded.read().decode("utf-8", errors="replace")
-    cleaned_data = parse_and_clean_csv(raw_text)
-    analysis_output = analyze_reviews(cleaned_data["reviews"])
-    summary = _build_dashboard_summary(analysis_output["reviews"])
+    try:
+        cleaned = parse_and_clean_csv(file.read())
+        analysis_output = analyze_reviews(cleaned["rows"], batch_size=5)
+        summary = _build_dashboard_summary(analysis_output["reviews"])
 
-    return jsonify({
-        "summary": summary,
-        "cleaning_stats": cleaned_data["stats"],
-        "meta": analysis_output["meta"],
-        "reviews": analysis_output["reviews"],
-    })
+        return jsonify({
+            "summary": summary,
+            "cleaning_stats": cleaned["stats"],
+            "reviews": analysis_output["reviews"],
+            "meta": analysis_output["meta"],
+        })
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Server error: {str(exc)}"}), 500
 
 
 @app.route("/api/generate-reply", methods=["POST"])
 def api_generate_reply():
-    data = request.get_json(silent=True) or {}
-    review_text = data.get("review_text", "").strip()
+    payload = request.get_json(silent=True) or {}
+    product = str(payload.get("product") or "").strip()
+    rating = payload.get("rating", "unknown")
+    review_text = str(payload.get("review_text") or "").strip()
+    summary = str(payload.get("summary") or "").strip()
+
     if not review_text:
         return jsonify({"error": "Review text is required."}), 400
 
     try:
-        reply = generate_suggested_reply(
-            product=data.get("product", "Product"),
-            rating=data.get("rating", "unknown"),
-            review_text=review_text,
-            summary=data.get("summary", ""),
-        )
+        reply = generate_suggested_reply(product, rating, review_text, summary)
         return jsonify({"reply": reply})
     except Exception as exc:
         return jsonify({"error": f"Failed to generate reply: {str(exc)}"}), 500

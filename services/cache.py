@@ -1,47 +1,55 @@
 import json
 import sqlite3
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-DB_PATH = "cache.db"
-
-
-def get_connection(db_path=DB_PATH):
-    """Open SQLite database and create the cache table if it does not exist."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS review_cache (text_hash TEXT PRIMARY KEY, result_json TEXT)"
-    )
-    return conn
+DB_PATH = Path(__file__).resolve().parent.parent / "cache.db"
 
 
-def get_cached_analysis(text_hash, db_path=DB_PATH):
-    """Look up a review by its hash. Return the saved dictionary, or None if not found."""
+def init_db() -> None:
+    """Create the SQLite cache table if it does not exist."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_cache (
+                text_hash TEXT PRIMARY KEY,
+                analysis_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+
+
+def get_cached_analysis(text_hash: str) -> Optional[Dict[str, Any]]:
+    """Return cached analysis dictionary for a given review text hash, or None."""
     if not text_hash:
         return None
-
-    conn = get_connection(db_path)
-    cursor = conn.execute(
-        "SELECT result_json FROM review_cache WHERE text_hash = ?",
-        (text_hash,),
-    )
-    row = cursor.fetchone()
-    conn.close()
-
-    if row:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT analysis_json FROM review_cache WHERE text_hash = ?",
+            (text_hash,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
         return json.loads(row[0])
-    return None
+    except json.JSONDecodeError:
+        return None
 
 
-def save_cached_analysis(text_hash, result, db_path=DB_PATH):
-    """Save a review's AI analysis result into SQLite."""
+def save_cached_analysis(text_hash: str, analysis: Dict[str, Any]) -> None:
+    """Persist validated analysis JSON in SQLite keyed by review text hash."""
     if not text_hash:
         return
-
-    conn = get_connection(db_path)
-    # Remove any old entry for this hash first, then insert the fresh result
-    conn.execute("DELETE FROM review_cache WHERE text_hash = ?", (text_hash,))
-    conn.execute(
-        "INSERT INTO review_cache (text_hash, result_json) VALUES (?, ?)",
-        (text_hash, json.dumps(result)),
-    )
-    conn.commit()
-    conn.close()
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO review_cache (text_hash, analysis_json)
+            VALUES (?, ?)
+            """,
+            (text_hash, json.dumps(analysis)),
+        )
+        conn.commit()
